@@ -1,0 +1,110 @@
+#include <windows.h>
+
+#include <MinHook.h>
+
+#include "common.h"
+#include "config.h"
+#include "hooks.h"
+#include "log.h"
+
+static HMODULE g_hModule = nullptr;
+
+static DWORD WINAPI InitThread(LPVOID) {
+    try {
+        const std::string dir = xlog::ModuleDir();
+        LoadConfig(dir);
+        xlog::Init(g_cfg.log);
+
+        xlog::Write("=== cs_translate started ===");
+        xlog::Write("module: %s", xlog::ModulePath().c_str());
+        xlog::Write("settings: %s", IniFilePath().c_str());
+        xlog::Write("enabled=%d show_sentence=%d show_words=%d max_words=%d charset=%s",
+                    g_cfg.enabled ? 1 : 0, g_cfg.showSentence ? 1 : 0, g_cfg.showWords ? 1 : 0,
+                    g_cfg.maxWords, g_cfg.charset.c_str());
+
+        StartWorker();
+
+        if (!g_cfg.enabled)
+            xlog::Write("config: enabled=0 -> translating paused (translate_active 1 to resume)");
+
+        MH_STATUS st = MH_Initialize();
+        xlog::Write("MH_Initialize: %s", MH_StatusToString(st));
+        if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) return 0;
+
+        if (!InstallLoaderHooks()) xlog::Write("LoadLibrary hooks incomplete");
+
+        PatchEngineTableEarly();
+
+        HMODULE c = GetModuleHandleA("client.dll");
+        if (c) TryHookClient(c, "init thread (already loaded)");
+
+        while (!g_shutdown.load() && !IsClientHooked()) {
+            HMODULE h = GetModuleHandleA("client.dll");
+            if (h) TryHookClient(h, "polling fallback");
+            Sleep(200);
+        }
+        xlog::Write("ready (clientHooked=%d)", IsClientHooked() ? 1 : 0);
+
+        RegisterCommandsNow();
+        {
+            const std::string ready =
+                g_cfg.prefix + " translator ready - target: " + GetDstLang() +
+                " | source: " + GetSrcLang() +
+                (g_cfg.enabled ? "" : " | PAUSED (translate_active 1)");
+            ConsoleWriteNow(ready);
+            if (g_cfg.enabled)
+                OverlayPush(ready, 255, 205, 60);
+        }
+        PrintCommandList();
+    } catch (const std::exception& e) {
+        xlog::Write("init exception: %s", e.what());
+    } catch (...) {
+        xlog::Write("init unknown exception");
+    }
+    return 0;
+}
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
+    switch (reason) {
+        case DLL_PROCESS_ATTACH:
+            DisableThreadLibraryCalls(hModule);
+            g_hModule = hModule;
+            xlog::SetModuleHandle(hModule);
+            xlog::Init(true);
+
+            xlog::Write("DllMain(attach): client.dll present=%d",
+                        GetModuleHandleA("client.dll") ? 1 : 0);
+
+            {
+                HMODULE pinned = nullptr;
+                GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_PIN,
+                                   (LPCSTR)&DllMain, &pinned);
+            }
+
+            {
+                MH_STATUS st = MH_Initialize();
+                xlog::Write("DllMain: MH_Initialize %s", MH_StatusToString(st));
+                if (st == MH_OK || st == MH_ERROR_ALREADY_INITIALIZED) {
+                    if (InstallLoaderHooks())
+                        xlog::Write("DllMain: LoadLibrary hooks installed");
+                    else
+                        xlog::Write("DllMain: LoadLibrary hooks PARTIAL");
+                    PatchEngineTableEarly();
+                }
+            }
+
+            {
+                HANDLE t = CreateThread(nullptr, 0, InitThread, nullptr, 0, nullptr);
+                if (t) CloseHandle(t);
+            }
+            break;
+
+        case DLL_PROCESS_DETACH:
+            g_shutdown.store(true);
+            MH_DisableHook(MH_ALL_HOOKS);
+            MH_Uninitialize();
+            break;
+    }
+    return TRUE;
+}

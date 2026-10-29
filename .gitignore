@@ -1,0 +1,38 @@
+# build
+build/
+out/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+*.vcxproj.user
+
+# visual studio / ide
+.vs/
+.vscode/
+*.suo
+*.user
+*.aps
+
+# runtime artifacts (created next to the .asi or by tests)
+*.log
+htmlcache/
+steam_appid.txt
+tools/e2e/out/
+
+# internal project notes (not part of the public repo)
+context.md
+
+# stray 0-byte files from console redirects
+console
+console)
+konsol
+
+# stray test output with redirect typos
+tools/e2e/turkish)
+tools/e2e/i*
+tools/e2e/*çler
+
+# dependencies are vendored in-repo on purpose (vendor/minhook)
+# the ASI loader is not needed: the game loads .asi files itself
+vendor/ual/
+vendor/winmm-ual.zip
