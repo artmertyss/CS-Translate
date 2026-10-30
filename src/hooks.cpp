@@ -1,7 +1,5 @@
 #include "hooks.h"
 
-#include <MinHook.h>
-
 #include <cstring>
 
 #include "chat.h"
@@ -10,8 +8,6 @@
 #include "log.h"
 #include "utf8.h"
 
-static FnInitialize g_realInitialize = nullptr;
-static FnHUDInit g_realHUDInit = nullptr;
 static FnHUDRedraw g_realHUDRedraw = nullptr;
 static FnHookUserMsg g_realHookUserMsg = nullptr;
 static FnConsolePrint g_consolePrint = nullptr;
@@ -27,6 +23,7 @@ static FnClientCmd g_clientCmd = nullptr;
 
 static int __cdecl Hook_UserMsg(const char* name, int iSize, void* pbuf);
 static int __cdecl Hook_HookUserMsg(char* name, UserMsgHook fn);
+static void EnsureSayTextHook(HMODULE hClient);
 
 static std::mutex g_umMtx;
 static std::map<std::string, UserMsgHook> g_origUserMsg;
@@ -354,6 +351,7 @@ static bool PatchUserMsg(enginefuncs_t* tab) {
         xlog::Write("enginefuncs pfnHookUserMsg write failed (protection?)");
         return false;
     }
+
     return true;
 }
 
@@ -420,53 +418,6 @@ static int __cdecl Hook_UserMsg(const char* name, int iSize, void* pbuf) {
             }
         }
     } catch (...) {
-    }
-    return r;
-}
-
-static int __cdecl Hook_Initialize(enginefuncs_t* p, int ver) {
-    xlog::Write(">>> client!Initialize called (hook active, p=%p)", (void*)p);
-    bool revert = false;
-    try {
-        if (p) {
-            RevalidateReal(p);
-            void* cur = p->f[engidx::HookUserMsg];
-            if (cur != (void*)&Hook_HookUserMsg && IsValidCodePtr(cur)) {
-                if (!g_realHookUserMsg) {
-                    g_realHookUserMsg = (FnHookUserMsg)cur;
-                    CaptureSlots(p);
-                }
-                if (g_realHookUserMsg) {
-                    if (WriteSlot(&p->f[engidx::HookUserMsg], (void*)&Hook_HookUserMsg)) {
-                        g_engineTable = p;
-                        revert = true;
-                        xlog::Write("A) Initialize: engine table pfnHookUserMsg patched");
-                    } else {
-                        xlog::Write("A) Initialize: engine table write failed, handed over to B");
-                    }
-                }
-            } else if (cur == (void*)&Hook_HookUserMsg) {
-                xlog::Write("A) Initialize: early patch active (engine table stayed with us)");
-            } else if (!IsValidCodePtr(cur)) {
-                xlog::Write("A) Initialize: pfnHookUserMsg invalid slot (%p)", cur);
-            } else {
-                xlog::Write("A) Initialize: slot already ours, nothing to do");
-            }
-        }
-    } catch (...) {
-    }
-
-    int r = 0;
-    try {
-        r = g_realInitialize ? g_realInitialize(p, ver) : 0;
-    } catch (...) {
-    }
-
-    if (revert && p) {
-        if (!WriteSlot(&p->f[engidx::HookUserMsg], (void*)g_realHookUserMsg))
-            xlog::Write("A) Initialize: engine table revert failed");
-        else
-            xlog::Write("A) Initialize: engine table reverted, result=%d", r);
     }
     return r;
 }
@@ -743,29 +694,6 @@ static void __cdecl Cmd_HudPos() {
     else
         snprintf(buf, sizeof(buf), " HUD position -> x=%d y=%d  (saved)", x, y);
     ConsoleWriteNow(g_cfg.prefix + buf);
-}
-
-static void __cdecl Hook_HUDInit() {
-    xlog::Write(">>> client!HUD_Init called (hook active)");
-    try {
-        if (!g_engfuncs && g_hClient) g_engfuncs = ResolveEngfuncs(g_hClient);
-        RevalidateReal(g_engfuncs);
-        CaptureSlots(g_engfuncs);
-        RegisterCommandsNow();
-        bool already = g_engfuncs && g_engfuncs->f[engidx::HookUserMsg] == (void*)&Hook_HookUserMsg;
-        if (!already) {
-            if (PatchUserMsg(g_engfuncs)) {
-                xlog::Write("B) HUD_Init: gEngfuncs.pfnHookUserMsg patched");
-            } else {
-                xlog::Write("B) HUD_Init: patch FAILED (g_engfuncs=%p)", (void*)g_engfuncs);
-            }
-        } else {
-            xlog::Write("B) HUD_Init: already patched (A active)");
-        }
-    } catch (...) {
-    }
-
-    if (g_realHUDInit) g_realHUDInit();
 }
 
 void RegisterCommandsNow() {
@@ -1058,6 +986,7 @@ static int __cdecl Hook_HUDRedraw(float t, int inter) {
             first = true;
             xlog::Write("HUD_Redraw first call -> console dump and screen drawing active");
         }
+        if (g_hClient) EnsureSayTextHook(g_hClient);
         FlushSayQueue();
         if (g_cfg.testChat) {
             static ULONGLONG t0 = 0;
@@ -1091,134 +1020,167 @@ static int __cdecl Hook_HUDRedraw(float t, int inter) {
     return g_realHUDRedraw ? g_realHUDRedraw(t, inter) : 1;
 }
 
-using FnLoadLibraryA = HMODULE(WINAPI*)(LPCSTR);
-using FnLoadLibraryW = HMODULE(WINAPI*)(LPCWSTR);
-using FnLoadLibraryExA = HMODULE(WINAPI*)(LPCSTR, HANDLE, DWORD);
-using FnLoadLibraryExW = HMODULE(WINAPI*)(LPCWSTR, HANDLE, DWORD);
+static void* g_hudRedrawSlot = nullptr;
+static void* g_saySlot = nullptr;
 
-static FnLoadLibraryA g_realLoadLibraryA = nullptr;
-static FnLoadLibraryW g_realLoadLibraryW = nullptr;
-static FnLoadLibraryExA g_realLoadLibraryExA = nullptr;
-static FnLoadLibraryExW g_realLoadLibraryExW = nullptr;
-
-static bool EndsWithI(const char* s, const char* suffix) {
-    size_t n = strlen(s), m = strlen(suffix);
-    if (n < m) return false;
-    return _stricmp(s + (n - m), suffix) == 0;
-}
-
-static void OnModuleLoaded(HMODULE h) {
-    if (!h || g_clientHooked.load()) return;
-    char path[MAX_PATH] = {0};
-    if (!GetModuleFileNameA(h, path, MAX_PATH)) return;
-    const char* base = strrchr(path, '\\');
-    base = base ? base + 1 : path;
-    if (!EndsWithI(base, "client.dll")) return;
-    xlog::Write("loaded via LoadLibrary hook: %s", base);
-    TryHookClient(h, "LoadLibrary hook");
-}
-
-static HMODULE WINAPI Hook_LoadLibraryA(LPCSTR n) {
-    HMODULE h = g_realLoadLibraryA ? g_realLoadLibraryA(n) : nullptr;
-    if (h) {
-        try {
-            OnModuleLoaded(h);
-        } catch (...) {
+static uintptr_t FindStringAddr(HMODULE h, const char* needle) {
+    if (!h || !needle || !*needle) return 0;
+    const size_t nlen = strlen(needle);
+    Section sec{};
+    const char* secs[] = {".rdata", ".data"};
+    for (int s = 0; s < 2; s++) {
+        if (!GetSection(h, secs[s], sec)) continue;
+        BYTE* base = (BYTE*)h + sec.va;
+        for (size_t off = 0; off + nlen + 1 <= sec.vsize; off++) {
+            if (base[off] != (BYTE)needle[0]) continue;
+            if (memcmp(base + off, needle, nlen) == 0 && base[off + nlen] == 0)
+                return (uintptr_t)(base + off);
         }
     }
-    return h;
-}
-static HMODULE WINAPI Hook_LoadLibraryW(LPCWSTR n) {
-    HMODULE h = g_realLoadLibraryW ? g_realLoadLibraryW(n) : nullptr;
-    if (h) {
-        try {
-            OnModuleLoaded(h);
-        } catch (...) {
-        }
-    }
-    return h;
-}
-static HMODULE WINAPI Hook_LoadLibraryExA(LPCSTR n, HANDLE f, DWORD fl) {
-    HMODULE h = g_realLoadLibraryExA ? g_realLoadLibraryExA(n, f, fl) : nullptr;
-    if (h) {
-        try {
-            OnModuleLoaded(h);
-        } catch (...) {
-        }
-    }
-    return h;
-}
-static HMODULE WINAPI Hook_LoadLibraryExW(LPCWSTR n, HANDLE f, DWORD fl) {
-    HMODULE h = g_realLoadLibraryExW ? g_realLoadLibraryExW(n, f, fl) : nullptr;
-    if (h) {
-        try {
-            OnModuleLoaded(h);
-        } catch (...) {
-        }
-    }
-    return h;
+    return 0;
 }
 
-static bool CreateHook(void* target, void* detour, void** original, const char* what) {
-    if (!target || !detour) return false;
-    MH_STATUS st = MH_CreateHook(target, detour, original);
-    if (st != MH_OK && st != MH_ERROR_ALREADY_CREATED) {
-        xlog::Write("MH_CreateHook(%s) failed: %s", what, MH_StatusToString(st));
-        return false;
+static void* FindUserMsgSlot(const char* name, HMODULE hClient) {
+    HMODULE hw = GetModuleHandleA("hw.dll");
+    if (!hw) hw = GetModuleHandleA("sw.dll");
+    if (!hw) return nullptr;
+    const uintptr_t strAddr = FindStringAddr(hw, name);
+    if (!strAddr) return nullptr;
+    Section sec{};
+    const char* secs[] = {".data", ".rdata"};
+    for (int s = 0; s < 2; s++) {
+        if (!GetSection(hw, secs[s], sec)) continue;
+        BYTE* base = (BYTE*)hw + sec.va;
+        for (size_t off = 0; off + 8 <= sec.vsize; off += 4) {
+            auto* p = (void**)(base + off);
+            if ((uintptr_t)p[0] != strAddr) continue;
+            void* fn = p[1];
+            if (!IsValidCodePtr(fn)) continue;
+            if (hClient && ModuleOfPtr(fn) != hClient) continue;
+            return (void*)&p[1];
+        }
     }
-    st = MH_EnableHook(target);
-    if (st != MH_OK) {
-        xlog::Write("MH_EnableHook(%s) failed: %s", what, MH_StatusToString(st));
-        return false;
-    }
-    xlog::Write("hook installed: %s -> %p", what, target);
-    return true;
+    return nullptr;
 }
 
-bool InstallLoaderHooks() {
-    static bool done = false;
-    if (done) return true;
-    HMODULE k32 = GetModuleHandleA("kernel32.dll");
-    if (!k32) return false;
-    bool ok = true;
-    if (!CreateHook((void*)GetProcAddress(k32, "LoadLibraryA"), (void*)&Hook_LoadLibraryA,
-                    (void**)&g_realLoadLibraryA, "LoadLibraryA"))
-        ok = false;
-    if (!CreateHook((void*)GetProcAddress(k32, "LoadLibraryW"), (void*)&Hook_LoadLibraryW,
-                    (void**)&g_realLoadLibraryW, "LoadLibraryW"))
-        ok = false;
-    if (!CreateHook((void*)GetProcAddress(k32, "LoadLibraryExA"), (void*)&Hook_LoadLibraryExA,
-                    (void**)&g_realLoadLibraryExA, "LoadLibraryExA"))
-        ok = false;
-    if (!CreateHook((void*)GetProcAddress(k32, "LoadLibraryExW"), (void*)&Hook_LoadLibraryExW,
-                    (void**)&g_realLoadLibraryExW, "LoadLibraryExW"))
-        ok = false;
-    done = true;
-    return ok;
+static void EnsureSayTextHook(HMODULE hClient) {
+    if (!g_saySlot) g_saySlot = FindUserMsgSlot("SayText", hClient);
+    if (!g_saySlot) return;
+    void* cur = *(void**)g_saySlot;
+    if (cur == (void*)&Hook_UserMsg) return;
+    if (IsValidCodePtr(cur)) {
+        std::lock_guard<std::mutex> lk(g_umMtx);
+        g_origUserMsg["SayText"] = (UserMsgHook)cur;
+    }
+    if (WriteSlot(g_saySlot, (void*)&Hook_UserMsg))
+        xlog::Write("SayText handler installed in usermsg table (data only)");
+}
+
+static bool WindowHasClientFuncs(void* slot, HMODULE hClient, int span) {
+    if (!slot || !hClient) return false;
+    void* pInit = (void*)GetProcAddress(hClient, "Initialize");
+    void* pHudInit = (void*)GetProcAddress(hClient, "HUD_Init");
+    void* pRedraw = (void*)GetProcAddress(hClient, "HUD_Redraw");
+    if (!pRedraw) return false;
+    auto* base = (void**)slot;
+    bool sawInit = false, sawHudInit = false;
+    for (int i = -span; i <= span; i++) {
+        void* p = base[i];
+        if (!IsValidCodePtr(p)) continue;
+        if (ModuleOfPtr(p) != hClient) continue;
+        if (p == pInit) sawInit = true;
+        if (p == pHudInit) sawHudInit = true;
+        if (sawInit && sawHudInit) return true;
+    }
+    return false;
+}
+
+static void* FindHudRedrawSlot(HMODULE hClient) {
+    void* pRedraw = (void*)GetProcAddress(hClient, "HUD_Redraw");
+    if (!pRedraw) return nullptr;
+
+    const char* mods[] = {"hw.dll", "sw.dll", nullptr};
+    for (int m = 0; mods[m]; m++) {
+        HMODULE h = GetModuleHandleA(mods[m]);
+        if (!h) continue;
+        Section sec{};
+        const char* names[] = {".data", ".rdata"};
+        for (int si = 0; si < 2; si++) {
+            if (!GetSection(h, names[si], sec)) continue;
+            BYTE* base = (BYTE*)h + sec.va;
+            for (uintptr_t off = 0; off + sizeof(void*) <= sec.vsize;
+                 off += sizeof(void*)) {
+                auto* p = (void**)(base + off);
+                if (*p != pRedraw) continue;
+                void* slot = (void*)(base + off);
+                if (!WindowHasClientFuncs(slot, hClient, 96)) continue;
+                xlog::Write("client func table found (%s+0x%X), HUD_Redraw slot %p",
+                            mods[m], (unsigned)off, slot);
+                return slot;
+            }
+        }
+    }
+    return nullptr;
+}
+
+static void InstallHudRedrawHook(HMODULE hClient) {
+    if (g_hudRedrawSlot) return;
+    void* slot = FindHudRedrawSlot(hClient);
+    if (!slot) {
+        xlog::Write("client func table not found - overlay drawing disabled");
+        return;
+    }
+    void* cur = *(void**)slot;
+    if (!IsValidCodePtr(cur)) {
+        xlog::Write("HUD_Redraw slot has no valid pointer");
+        return;
+    }
+    if (!g_realHUDRedraw) g_realHUDRedraw = (FnHUDRedraw)cur;
+    if (WriteSlot(slot, (void*)&Hook_HUDRedraw)) {
+        g_hudRedrawSlot = slot;
+        xlog::Write("HUD_Redraw swapped in client func table (data only, no code patch)");
+    } else {
+        xlog::Write("HUD_Redraw slot write failed");
+    }
 }
 
 bool IsClientHooked() { return g_clientHooked.load(); }
 
 bool TryHookClient(HMODULE hClient, const char* via) {
     if (!hClient) return false;
-    if (g_clientHooked.exchange(true)) return true;
+    if (g_clientHooked.load()) return true;
 
     g_hClient = hClient;
     xlog::Write("client.dll caught: %p (via: %s)", (void*)hClient, via ? via : "?");
 
-    bool ok = true;
-    if (!CreateHook((void*)GetProcAddress(hClient, "Initialize"), (void*)&Hook_Initialize,
-                    (void**)&g_realInitialize, "client!Initialize"))
-        ok = false;
-    if (!CreateHook((void*)GetProcAddress(hClient, "HUD_Init"), (void*)&Hook_HUDInit,
-                    (void**)&g_realHUDInit, "client!HUD_Init"))
-        ok = false;
-    if (!CreateHook((void*)GetProcAddress(hClient, "HUD_Redraw"), (void*)&Hook_HUDRedraw,
-                    (void**)&g_realHUDRedraw, "client!HUD_Redraw"))
-        ok = false;
+    if (!g_engfuncs) {
+        if (g_engineTable) {
+            g_engfuncs = g_engineTable;
+        } else {
+            g_engfuncs = ResolveEngfuncs(hClient);
+        }
+    }
+    if (!g_engfuncs) {
+        xlog::Write("client: engine table not resolved yet, retrying");
+        return false;
+    }
 
-    if (!ok) xlog::Write("client hooks incomplete");
+    CaptureSlots(g_engfuncs);
 
-    g_engfuncs = ResolveEngfuncs(hClient);
-    return ok;
+    RegisterCommandsNow();
+
+    if (g_engfuncs->f[engidx::HookUserMsg] != (void*)&Hook_HookUserMsg) {
+        if (PatchUserMsg(g_engfuncs)) {
+            xlog::Write("A) engine table pfnHookUserMsg swapped (data only)");
+        } else {
+            xlog::Write("A) engine table pfnHookUserMsg swap failed");
+        }
+    } else {
+        xlog::Write("A) engine table pfnHookUserMsg already ours");
+    }
+
+    InstallHudRedrawHook(hClient);
+    EnsureSayTextHook(hClient);
+    g_clientHooked = true;
+    return true;
 }

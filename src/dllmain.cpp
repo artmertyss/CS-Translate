@@ -1,13 +1,21 @@
 #include <windows.h>
 
-#include <MinHook.h>
-
 #include "common.h"
 #include "config.h"
 #include "hooks.h"
 #include "log.h"
 
 static HMODULE g_hModule = nullptr;
+
+static DWORD WINAPI ClientWatch(LPVOID) {
+    while (!g_shutdown.load() && !IsClientHooked()) {
+        HMODULE h = GetModuleHandleA("client.dll");
+        if (h) TryHookClient(h, "watch thread");
+        Sleep(100);
+    }
+    xlog::Write("client watch finished (clientHooked=%d)", IsClientHooked() ? 1 : 0);
+    return 0;
+}
 
 static DWORD WINAPI InitThread(LPVOID) {
     try {
@@ -27,22 +35,14 @@ static DWORD WINAPI InitThread(LPVOID) {
         if (!g_cfg.enabled)
             xlog::Write("config: enabled=0 -> translating paused (translate_active 1 to resume)");
 
-        MH_STATUS st = MH_Initialize();
-        xlog::Write("MH_Initialize: %s", MH_StatusToString(st));
-        if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) return 0;
-
-        if (!InstallLoaderHooks()) xlog::Write("LoadLibrary hooks incomplete");
+        {
+            HANDLE t = CreateThread(nullptr, 0, ClientWatch, nullptr, 0, nullptr);
+            if (t) CloseHandle(t);
+        }
 
         PatchEngineTableEarly();
 
-        HMODULE c = GetModuleHandleA("client.dll");
-        if (c) TryHookClient(c, "init thread (already loaded)");
-
-        while (!g_shutdown.load() && !IsClientHooked()) {
-            HMODULE h = GetModuleHandleA("client.dll");
-            if (h) TryHookClient(h, "polling fallback");
-            Sleep(200);
-        }
+        for (int i = 0; i < 30 && !IsClientHooked(); i++) Sleep(100);
         xlog::Write("ready (clientHooked=%d)", IsClientHooked() ? 1 : 0);
 
         RegisterCommandsNow();
@@ -82,17 +82,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
                                    (LPCSTR)&DllMain, &pinned);
             }
 
-            {
-                MH_STATUS st = MH_Initialize();
-                xlog::Write("DllMain: MH_Initialize %s", MH_StatusToString(st));
-                if (st == MH_OK || st == MH_ERROR_ALREADY_INITIALIZED) {
-                    if (InstallLoaderHooks())
-                        xlog::Write("DllMain: LoadLibrary hooks installed");
-                    else
-                        xlog::Write("DllMain: LoadLibrary hooks PARTIAL");
-                    PatchEngineTableEarly();
-                }
-            }
 
             {
                 HANDLE t = CreateThread(nullptr, 0, InitThread, nullptr, 0, nullptr);
@@ -102,8 +91,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
 
         case DLL_PROCESS_DETACH:
             g_shutdown.store(true);
-            MH_DisableHook(MH_ALL_HOOKS);
-            MH_Uninitialize();
             break;
     }
     return TRUE;

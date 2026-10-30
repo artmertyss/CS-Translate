@@ -7,10 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 cmake_policy(SET CMP0091 NEW)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-include(FetchContent)
-FetchContent_Declare(minhook SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/minhook")
-FetchContent_MakeAvailable(minhook)
-
 add_library(cs_translate SHARED
     src/dllmain.cpp
     src/log.cpp
@@ -34,10 +30,9 @@ set_target_properties(cs_translate PROPERTIES
 
 target_include_directories(cs_translate PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
-    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/minhook/include"
 )
 
-target_link_libraries(cs_translate PRIVATE minhook winhttp)
+target_link_libraries(cs_translate PRIVATE winhttp)
 target_compile_definitions(cs_translate PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_compile_options(cs_translate PRIVATE /utf-8 /W3)
 

@@ -6,8 +6,6 @@
 bool TryHookClient(HMODULE hClient, const char* via = "?");
 bool IsClientHooked();
 
-bool InstallLoaderHooks();
-
 void DrainConsole();
 
 void RegisterCommandsNow();

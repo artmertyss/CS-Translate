@@ -10,6 +10,7 @@
 #include "chat.h"
 #include "config.h"
 #include "dict.h"
+#include "hooks.h"
 #include "log.h"
 #include "translate.h"
 #include "utf8.h"
@@ -963,6 +964,7 @@ static void WorkerProc() {
         if (!JobPop(item)) {
             if (g_shutdown.load()) break;
             ProcessSayJobs();
+            DrainConsole();
             continue;
         }
         try {
@@ -973,6 +975,7 @@ static void WorkerProc() {
             xlog::Write("worker unknown exception");
         }
         ProcessSayJobs();
+        DrainConsole();
     }
     xlog::Write("worker thread stopped");
 }

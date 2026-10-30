@@ -12,6 +12,9 @@ Client-side only: nothing is sent to the server, the game is not modified,
 no ASI loader needed — the game loads `.asi` files by itself. Powered by
 Google Translate, source language detected automatically.
 
+The plugin never patches game code: it swaps function pointers in the engine's
+own tables, so `client.dll` / `hw.dll` stay byte-for-byte identical in memory.
+
 > [!WARNING]
 > Google Translate is not perfect and **can be wrong**. Short messages, slang
 > and typos are the worst cases: the language may be detected incorrectly and
