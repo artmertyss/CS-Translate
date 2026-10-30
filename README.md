@@ -26,8 +26,7 @@ Google Translate, source language detected automatically.
    `...\Steam\steamapps\common\Half-Life\cs_translate.asi`
 
 3. Start the game — `[TR] translator ready - target: en | source: auto` shows up
-   in the top-left corner of the screen (it is also in the console if you open
-   it with `` ` ``).
+   in the top-left corner of the screen.
 
 That's it. Settings live in `%APPDATA%\cs_translate\cs_translate.ini`.
 
