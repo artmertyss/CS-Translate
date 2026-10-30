@@ -5,7 +5,7 @@ plugin — when someone writes in Russian, Bulgarian, Arabic, German … you get
 the translation in your console and on a colored HUD overlay.
 
 ```
-[TR] Путин (russian -> turkish): merhaba nasılsın
+[TR] Путин (russian -> english): hi, how are you
 ```
 
 Client-side only: nothing is sent to the server, the game is not modified,
