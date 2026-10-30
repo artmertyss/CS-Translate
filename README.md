@@ -12,6 +12,12 @@ Client-side only: nothing is sent to the server, the game is not modified,
 no ASI loader needed — the game loads `.asi` files by itself. Powered by
 Google Translate, source language detected automatically.
 
+> [!WARNING]
+> Google Translate is not perfect and **can be wrong**. Short messages, slang
+> and typos are the worst cases: the language may be detected incorrectly and
+> the translation may be misleading. Treat the output as a hint, not as an
+> exact translation.
+
 ## Install
 
 1. Download `cs_translate.asi` from [Releases](../../releases).
