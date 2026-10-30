@@ -61,7 +61,7 @@ cmake -S . -B build -A Win32
 cmake --build build --config Release
 ```
 
-Requirements: Visual Studio, CMake 3.16+, Windows, internet.
+Requirements: Visual Studio, CMake 3.16+.
 
 ## Screenshots
 
