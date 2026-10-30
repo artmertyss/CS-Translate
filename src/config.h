@@ -13,9 +13,9 @@ struct Config {
     bool showOverlay = true;
     bool showConsole = true;
     int  hudTime = 8;
-    int  hudX = 20;
+    int  hudX = 10;
     int  hudY = 200;
-    bool log = true;
+    bool log = false;
 
     std::string prefix = "[TR]";
 
@@ -36,7 +36,7 @@ struct Config {
 
     unsigned gEngfuncsRva = 0x125CC0;
 
-    bool translateOwn = false;
+    bool translateOwn = true;
     bool serverMsgs = false;
 
     bool testChat = false;

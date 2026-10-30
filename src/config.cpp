@@ -253,7 +253,7 @@ void LoadConfig(const std::string& dir) {
                     "hud_time=8\n"
                     "; HUD position in pixels from the top-left corner\n"
                     "; (-1 = anchored bottom right)\n"
-                    "hud_x=20\n"
+                    "hud_x=10\n"
                     "hud_y=200\n"
                     "\n"
                     "; console encoding: utf8 | cp1251 | ascii\n"
@@ -271,7 +271,7 @@ void LoadConfig(const std::string& dir) {
                     "server_msgs=0\n"
                     "; also translate our own messages (0/1)\n"
                     "; word-by-word meanings apply the same way\n"
-                    "translate_own=0\n"
+                    "translate_own=1\n"
                     "; TEST: if 1, we send a say ourselves in a map and\n"
                     "; verify the capture chain automatically (normally 0)\n"
                     "test_chat=0\n"
@@ -300,7 +300,8 @@ void LoadConfig(const std::string& dir) {
                     "slang_words=%s\n"
                     "; show the meaning next to slang words (0/1)\n"
                     "slang_notes=1\n"
-                    "log=1\n",
+                    "; 1 = write cs_translate.log next to the .asi (0/1)\n"
+                    "log=0\n",
                     kDefaultSlang);
             fclose(f);
         }

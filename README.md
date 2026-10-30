@@ -22,8 +22,7 @@ Google Translate, source language detected automatically.
 3. Start the game, open the console (`` ` ``) — you should see
    `[TR] translator ready - target: en | source: auto`.
 
-That's it. Settings live in `%APPDATA%\cs_translate\cs_translate.ini`,
-the log is `cs_translate.log` next to the `.asi`.
+That's it. Settings live in `%APPDATA%\cs_translate\cs_translate.ini`.
 
 ## Usage
 
@@ -58,7 +57,11 @@ cmake --build build --config Release
 
 Requirements: Visual Studio, CMake 3.16+, Windows, internet.
 
-<!-- Screenshots: drop images into docs/ and link them here. -->
+## Screenshots
+
+| Commands | HUD |
+|---|---|
+| ![commands](docs/commands.png) | ![hud](docs/hud.png) |
 
 ## License
 

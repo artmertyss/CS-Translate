@@ -70,7 +70,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
             DisableThreadLibraryCalls(hModule);
             g_hModule = hModule;
             xlog::SetModuleHandle(hModule);
-            xlog::Init(true);
+            xlog::Init(false);
 
             xlog::Write("DllMain(attach): client.dll present=%d",
                         GetModuleHandleA("client.dll") ? 1 : 0);
